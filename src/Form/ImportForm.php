@@ -259,15 +259,15 @@ class ImportForm extends FormBase {
           continue;
         }
 
-        // Build geolocation field for Geolocation module
-        // Format: latitude and longitude as separate values
-        $geolocation = [];
-        if (!empty($data[8]) && !empty($data[9])) {
-          $geolocation = [
-            'lat' => trim($data[8]),
-            'lng' => trim($data[9]),
-          ];
-        }
+         // Build geolocation field for Geolocation module
+         // Format: latitude and longitude as separate values
+         $geolocation = [];
+         if (!empty($data[8]) && !empty($data[9])) {
+           $geolocation = [
+             'lat' => (float) trim($data[8]),
+             'lng' => (float) trim($data[9]),
+           ];
+         }
 
         $item = [
           'name' => trim($data[1]), // name (city/town)
