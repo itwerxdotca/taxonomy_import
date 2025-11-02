@@ -42,63 +42,69 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
   /**
    * {@inheritdoc}
    */
-public function updateTerm($vid, $term, $parentId, $description, $rowData, $termCustomFields) {
-     $needsSave = FALSE;
+  public function updateTerm($vid, $term, $parentId, $description, $rowData, $termCustomFields) {
+    $needsSave = FALSE;
 
-     if ($parentId) {
-       $parentIds = $this->getTermParentIds($term);
-       if (!in_array($parentId, $parentIds)) {
-         $parentIds[] = $parentId;
-         $term->set('parent', $parentIds);
-         $needsSave = TRUE;
-       }
-     }
+    if ($parentId) {
+      $parentIds = $this->getTermParentIds($term);
+      if (!in_array($parentId, $parentIds)) {
+        $parentIds[] = $parentId;
+        $term->set('parent', $parentIds);
+        $needsSave = TRUE;
+      }
+    }
 
-     if ($term->getDescription() != $description) {
-       $term->setDescription($description);
-       $needsSave = TRUE;
-     }
+    if ($term->getDescription() != $description) {
+      $term->setDescription($description);
+      $needsSave = TRUE;
+    }
 
-     // Update custom fields
-     foreach ($termCustomFields as $fieldName) {
-       if (isset($rowData[$fieldName]) && $term->hasField($fieldName)) {
-         // Special handling for geolocation fields (Geolocation module)
-         if ($fieldName === 'field_geolocation' && is_array($rowData[$fieldName])) {
-           $currentValue = $term->get($fieldName)->getValue();
-           $newValue = [
-             'lat' => $rowData[$fieldName]['lat'],
-             'lng' => $rowData[$fieldName]['lng'], // Geolocation module uses 'lng'
-           ];
+    // Update custom fields
+    foreach ($termCustomFields as $fieldName) {
+      if (!isset($rowData[$fieldName]) || !$term->hasField($fieldName)) {
+        continue;
+      }
 
-           // Check if field is empty or values are different
-           if (empty($currentValue) ||
-               !isset($currentValue[0]['lat']) ||
-               $currentValue[0]['lat'] != $newValue['lat'] ||
-               $currentValue[0]['lng'] != $newValue['lng']) {
-             $term->set($fieldName, $newValue);
-             $needsSave = TRUE;
-           }
-         }
-         else {
-           // For regular text fields
-           $fieldItem = $term->get($fieldName);
-           $currentValue = NULL;
+      // Special handling for geolocation fields
+      if ($fieldName === 'field_geolocation') {
+        if (!is_array($rowData[$fieldName]) || !isset($rowData[$fieldName]['lat']) || !isset($rowData[$fieldName]['lng'])) {
+          continue;
+        }
 
-           // Safely get the current value
-           if (!$fieldItem->isEmpty()) {
-             $currentValue = $fieldItem->value;
-           }
+        $currentValue = $term->get($fieldName)->getValue();
+        $newValue = [
+          'lat' => $rowData[$fieldName]['lat'],
+          'lng' => $rowData[$fieldName]['lng'],
+        ];
 
-           if ($currentValue != $rowData[$fieldName]) {
-             $term->set($fieldName, $rowData[$fieldName]);
-             $needsSave = TRUE;
-           }
-         }
-       }
-     }
+        if (empty($currentValue) ||
+            !isset($currentValue[0]['lat']) ||
+            !isset($currentValue[0]['lng']) ||
+            $currentValue[0]['lat'] != $newValue['lat'] ||
+            $currentValue[0]['lng'] != $newValue['lng']) {
+          $term->set($fieldName, $newValue);
+          $needsSave = TRUE;
+        }
+      }
+      else {
+        // For regular text fields
+        $fieldItem = $term->get($fieldName);
+        $currentValue = NULL;
 
-     return $needsSave ? $term->save() : TRUE;
-   }
+        if (!$fieldItem->isEmpty()) {
+          $currentValue = $fieldItem->value;
+        }
+
+        if ($currentValue != $rowData[$fieldName]) {
+          $term->set($fieldName, $rowData[$fieldName]);
+          $needsSave = TRUE;
+        }
+      }
+    }
+
+    return $needsSave ? $term->save() : TRUE;
+  }
+
   /**
    * {@inheritdoc}
    */

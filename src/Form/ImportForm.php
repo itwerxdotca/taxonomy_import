@@ -259,51 +259,54 @@ class ImportForm extends FormBase {
           continue;
         }
 
-        // Build geofield for Geofield module
-        $geolocation = [];
-        if (!empty($data[8]) && !empty($data[9])) {
+        // Build geolocation field for Geolocation module
+        $geolocation = NULL;
+        if (isset($data[8]) && isset($data[9]) && $data[8] !== '' && $data[9] !== '') {
+          $lat = (float) trim($data[8]);
+          $lng = (float) trim($data[9]);
+
           $geolocation = [
-            'lat' => (float) trim($data[8]),
-            'lon' => (float) trim($data[9]), // Geofield uses 'lon'
+            'lat' => $lat,
+            'lng' => $lng,
           ];
         }
 
         $item = [
-          'name' => trim($data[1]), // name (city/town)
-          'parent' => !empty($data[3]) ? trim($data[3]) : '', // province
-          'description' => '', // Leave description empty
+          'name' => trim($data[1]),
+          'parent' => !empty($data[3]) ? trim($data[3]) : '',
+          'description' => '',
         ];
 
         // Add custom fields - map each CSV column to its field
         if (!empty($data[0])) {
-          $item['field_city_id'] = trim($data[0]); // id
+          $item['field_city_id'] = trim($data[0]);
         }
         if (!empty($data[2])) {
-          $item['field_county'] = trim($data[2]); // county
+          $item['field_county'] = trim($data[2]);
         }
         if (!empty($data[4])) {
-          $item['field_province_code'] = trim($data[4]); // province_code
+          $item['field_province_code'] = trim($data[4]);
         }
         if (!empty($data[5])) {
-          $item['field_postcode_area'] = trim($data[5]); // postcode_area
+          $item['field_postcode_area'] = trim($data[5]);
         }
         if (!empty($data[6])) {
-          $item['field_type'] = trim($data[6]); // type
+          $item['field_type'] = trim($data[6]);
         }
         if (!empty($data[7])) {
-          $item['field_map_reference'] = trim($data[7]); // map_reference
+          $item['field_map_reference'] = trim($data[7]);
         }
-        if (!empty($geolocation)) {
-          $item['field_geolocation'] = $geolocation; // ['lat' => latitude, 'lng' => longitude]
+        if ($geolocation !== NULL) {
+          $item['field_geolocation'] = $geolocation;
         }
         if (!empty($data[10])) {
-          $item['field_census_division'] = trim($data[10]); // census_division
+          $item['field_census_division'] = trim($data[10]);
         }
         if (!empty($data[11])) {
-          $item['field_area_code'] = trim($data[11]); // area_code
+          $item['field_area_code'] = trim($data[11]);
         }
         if (!empty($data[12])) {
-          $item['field_timezone'] = trim($data[12]); // time_zone
+          $item['field_timezone'] = trim($data[12]);
         }
 
         $items[] = $item;
