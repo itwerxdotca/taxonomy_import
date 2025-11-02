@@ -259,21 +259,14 @@ class ImportForm extends FormBase {
           continue;
         }
 
-       // Build geolocation field for Geolocation module
-       // Format: latitude and longitude as separate values
-       $geolocation = [];
-       if (!empty($data[8]) && !empty($data[9])) {
-         $lat = (float) trim($data[8]);
-         $lng = (float) trim($data[9]);
-
-         // Validate coordinates are numeric
-         if (is_numeric($lat) && is_numeric($lng)) {
-           $geolocation = [
-             'lat' => $lat,
-             'lng' => $lng,
-           ];
-         }
-       }
+        // Build geofield for Geofield module
+        $geolocation = [];
+        if (!empty($data[8]) && !empty($data[9])) {
+          $geolocation = [
+            'lat' => (float) trim($data[8]),
+            'lon' => (float) trim($data[9]), // Geofield uses 'lon'
+          ];
+        }
 
         $item = [
           'name' => trim($data[1]), // name (city/town)

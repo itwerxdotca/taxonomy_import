@@ -42,7 +42,7 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
   /**
    * {@inheritdoc}
    */
-  public function updateTerm($vid, $term, $parentId, $description, $rowData, $termCustomFields) {
+public function updateTerm($vid, $term, $parentId, $description, $rowData, $termCustomFields) {
      $needsSave = FALSE;
 
      if ($parentId) {
@@ -62,12 +62,12 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
      // Update custom fields
      foreach ($termCustomFields as $fieldName) {
        if (isset($rowData[$fieldName]) && $term->hasField($fieldName)) {
-         // Special handling for geolocation fields
+         // Special handling for geolocation fields (Geolocation module)
          if ($fieldName === 'field_geolocation' && is_array($rowData[$fieldName])) {
            $currentValue = $term->get($fieldName)->getValue();
            $newValue = [
              'lat' => $rowData[$fieldName]['lat'],
-             'lng' => $rowData[$fieldName]['lng'],
+             'lng' => $rowData[$fieldName]['lng'], // Geolocation module uses 'lng'
            ];
 
            // Check if field is empty or values are different
@@ -80,7 +80,7 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
            }
          }
          else {
-           // For regular text fields, check if value property exists
+           // For regular text fields
            $fieldItem = $term->get($fieldName);
            $currentValue = NULL;
 
@@ -96,6 +96,7 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
          }
        }
      }
+
      return $needsSave ? $term->save() : TRUE;
    }
   /**
