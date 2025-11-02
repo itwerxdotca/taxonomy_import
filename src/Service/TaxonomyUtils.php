@@ -22,7 +22,6 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
    *
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
    *   The entity type manager.
-   *
    */
   public function __construct(EntityTypeManagerInterface $entityTypeManager) {
     $this->entityTypeManager = $entityTypeManager;
@@ -60,9 +59,15 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
       $needsSave = TRUE;
     }
 
-    foreach($termCustomFields as $termCustomField) {
-      $term->set($termCustomField, $rowData[$termCustomField]);
-      $needsSave = TRUE;
+    // Update custom fields
+    foreach ($termCustomFields as $fieldName) {
+      if (isset($rowData[$fieldName]) && $term->hasField($fieldName)) {
+        $currentValue = $term->get($fieldName)->value;
+        if ($currentValue != $rowData[$fieldName]) {
+          $term->set($fieldName, $rowData[$fieldName]);
+          $needsSave = TRUE;
+        }
+      }
     }
 
     return $needsSave ? $term->save() : TRUE;
@@ -86,7 +91,7 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
     $vocabulary = Vocabulary::create([
       'vid' => $vid,
       'machine_name' => $vid,
-      'name' => $name,
+      'name' => $vocabularyName,
       'description' => '',
     ]);
 
@@ -97,15 +102,20 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
    * {@inheritdoc}
    */
   public function createTerm($vid, $name, $parentId, $description, $rowData, $termCustomFields) {
-    $term = $this->entityTypeManager->getStorage('taxonomy_term')->create([
+    $termData = [
       'parent' => [$parentId],
       'name' => $name,
       'description' => $description,
       'vid' => $vid,
-    ]);
+    ];
 
-    foreach ($termCustomFields as $termCustomField) {
-      $term->set($termCustomField, $rowData[$termCustomField]);
+    $term = $this->entityTypeManager->getStorage('taxonomy_term')->create($termData);
+
+    // Set custom fields
+    foreach ($termCustomFields as $fieldName) {
+      if (isset($rowData[$fieldName]) && $term->hasField($fieldName)) {
+        $term->set($fieldName, $rowData[$fieldName]);
+      }
     }
 
     return $term->save();
@@ -142,71 +152,82 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
    * {@inheritdoc}
    */
   public function saveTerms($vid, $rows, $forceNewTerms = TRUE) {
+    // First pass: identify parent terms
+    $parentTerms = [];
+    foreach ($rows as $row) {
+      if (!empty($row['parent'])) {
+        $parentTerms[$row['parent']] = $row['parent'];
+      }
+    }
+
+    // Create parent terms first
+    foreach ($parentTerms as $parentName) {
+      $existingParent = $this->loadTerm($vid, $parentName);
+      if (!$existingParent) {
+        \Drupal::logger('taxonomy_import')->info('Creating parent term: @name', ['@name' => $parentName]);
+        $this->createTerm($vid, $parentName, 0, '', [], []);
+      }
+    }
+
+    // Second pass: create/update all terms
     foreach ($rows as $row) {
       $term = $this->loadTerm($vid, $row['name']);
 
-      //Update to load the most recent term matching term name for parent.
+      // Find parent ID
       $parentId = 0;
       if (!empty($row['parent'])) {
-        $parents = \Drupal::entityTypeManager()->getStorage('taxonomy_term')->loadByProperties(
-          [
-            'name' => $row['parent'],
-            'vid' => $vid,
-          ]
-        );
+        $parents = $this->entityTypeManager->getStorage('taxonomy_term')->loadByProperties([
+          'name' => $row['parent'],
+          'vid' => $vid,
+        ]);
+
         if (count($parents) > 0) {
-          \Drupal::logger('taxonomy_import')->debug('parent terms found with the name %name: <br>%parents<br><br>last tid is %tid',
-            [
-              '%name' => $row['parent'],
-              '%parents' => json_encode($parents, TRUE),
-              '%tid' => key($parents),
-            ]
-          );
-        }
-
-        $parentId = key($parents);
-      }
-
-      // Get the field names from the source file.
-      $fields_detected = array_keys($row);
-      \Drupal::logger('taxonomy_import')->debug('fields detected from xml: %fieldlist', [
-        '%fieldlist' => json_encode($fields_detected, TRUE),
-      ]);
-      $system_keys = ['name', 'parent', 'description'];
-
-      // Refine list of field names to only the custom fields.
-      foreach ($system_keys as $system_key) {
-        if (($key = array_search($system_key, $fields_detected)) !== FALSE) {
-          array_splice($fields_detected, $key, 1);
+          $parentId = key($parents);
+          \Drupal::logger('taxonomy_import')->debug('Parent term found: %name (tid: %tid)', [
+            '%name' => $row['parent'],
+            '%tid' => $parentId,
+          ]);
         }
       }
 
-      // Refine list of field names to only custom fields that exist for the vocabulary.
-      $fields_not_detected = [];
-      foreach ($fields_detected as $field_detected) {
-        $vocabulary_fields = \Drupal::service('entity_field.manager')->getFieldDefinitions('taxonomy_term', $vid);
-        if (isset($vocabulary_fields[$field_detected]) === FALSE) {
-          $key = array_search($field_detected, $fields_detected);
-          array_splice($fields_detected, $key, 1);
-          array_push($fields_not_detected, $field_detected);
+      // Identify custom fields (exclude system fields)
+      $systemKeys = ['name', 'parent', 'description'];
+      $customFields = [];
+      foreach (array_keys($row) as $key) {
+        if (!in_array($key, $systemKeys)) {
+          $customFields[] = $key;
         }
       }
-      \Drupal::logger('taxonomy_import')->debug('custom fields not in Drupal:<br>%fieldsMissing<br><br>custom fields matched in Drupal:<br>%fieldlist', [
-        '%fieldsMissing' => json_encode($fields_not_detected, TRUE),
-        '%fieldlist' => json_encode($fields_detected, TRUE),
-      ]);
 
-      $termCustomFields = [];
-      if (count($fields_detected) > 0) {
-        foreach ($fields_detected as $custom_field) {
-          array_push($termCustomFields, $custom_field);
+      // Verify custom fields exist in vocabulary
+      $vocabularyFields = \Drupal::service('entity_field.manager')
+        ->getFieldDefinitions('taxonomy_term', $vid);
+
+      $validCustomFields = [];
+      $missingFields = [];
+
+      foreach ($customFields as $fieldName) {
+        if (isset($vocabularyFields[$fieldName])) {
+          $validCustomFields[] = $fieldName;
+        }
+        else {
+          $missingFields[] = $fieldName;
         }
       }
+
+      if (!empty($missingFields)) {
+        \Drupal::logger('taxonomy_import')->warning('Fields not found in vocabulary @vid: @fields', [
+          '@vid' => $vid,
+          '@fields' => implode(', ', $missingFields),
+        ]);
+      }
+
+      // Create or update term
       if ($term && !$forceNewTerms) {
-        $this->updateTerm($vid, $term, $parentId, $row['description'], $row, $termCustomFields);
+        $this->updateTerm($vid, $term, $parentId, $row['description'] ?? '', $row, $validCustomFields);
       }
       else {
-        $this->createTerm($vid, $row['name'], $parentId, $row['description'], $row, $termCustomFields);
+        $this->createTerm($vid, $row['name'], $parentId, $row['description'] ?? '', $row, $validCustomFields);
       }
     }
   }

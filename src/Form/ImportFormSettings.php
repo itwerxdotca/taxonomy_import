@@ -13,16 +13,9 @@ class ImportFormSettings extends ConfigFormBase {
   /**
    * The default File extensions.
    *
-   * @var int
+   * @var string
    */
   const DEFAULT_FILE_EXTENSION = 'csv xml';
-
-  /**
-   * The default size of uploading files.
-   *
-   * @var int
-   */
-  const DEFAULT_FILE_SIZE = 256000000;
 
   /**
    * {@inheritdoc}
@@ -51,14 +44,12 @@ class ImportFormSettings extends ConfigFormBase {
       '#title' => $this->t('Allowed file extensions'),
       '#required' => TRUE,
       '#default_value' => $config->get('file_extensions') ?? static::DEFAULT_FILE_EXTENSION,
-      '#description' => $this->t('Extensions of files.'),
+      '#description' => $this->t('Separate extensions with a space (e.g., "csv xml").'),
     ];
-    $form['file_max_size'] = [
-      '#type' => 'number',
-      '#title' => $this->t('Max size of file'),
-      '#required' => TRUE,
-      '#default_value' => $config->get('file_max_size') ?? static::DEFAULT_FILE_SIZE,
-      '#description' => $this->t('Max size of file in bytes'),
+
+    $form['file_size_info'] = [
+      '#type' => 'item',
+      '#markup' => $this->t('<p><strong>Note:</strong> File upload size limits are managed by Drupal core and your PHP configuration. To change the maximum upload size, adjust your <code>php.ini</code> settings (<code>upload_max_filesize</code> and <code>post_max_size</code>) or your Drupal file upload settings.</p>'),
     ];
 
     return parent::buildForm($form, $form_state);
@@ -68,6 +59,7 @@ class ImportFormSettings extends ConfigFormBase {
    * {@inheritdoc}
    */
   public function validateForm(array &$form, FormStateInterface $form_state) {
+    parent::validateForm($form, $form_state);
   }
 
   /**
@@ -76,9 +68,6 @@ class ImportFormSettings extends ConfigFormBase {
   public function submitForm(array &$form, FormStateInterface $form_state) {
     $this->configFactory->getEditable('taxonomy_import.config')
       ->set('file_extensions', $form_state->getValue('file_extensions'))
-      ->save();
-    $this->configFactory->getEditable('taxonomy_import.config')
-      ->set('file_max_size', $form_state->getValue('file_max_size'))
       ->save();
 
     parent::submitForm($form, $form_state);
