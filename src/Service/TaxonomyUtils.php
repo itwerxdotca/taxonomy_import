@@ -18,6 +18,13 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
   protected $entityTypeManager;
 
   /**
+   * Cache for parent term lookups.
+   *
+   * @var array
+   */
+  protected $parentCache = [];
+
+  /**
    * OQUtils constructor.
    *
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entityTypeManager
@@ -40,18 +47,100 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
   }
 
   /**
+   * Load a term by name and parent context.
+   *
+   * @param string $vid
+   *   The vocabulary ID.
+   * @param string $name
+   *   The term name.
+   * @param int $parentId
+   *   The parent term ID (0 for root-level terms).
+   *
+   * @return \Drupal\taxonomy\Entity\Term|null
+   *   The term object or NULL if not found.
+   */
+  public function loadTermByNameAndParent($vid, $name, $parentId = 0) {
+    // Create a cache key
+    $cacheKey = "{$vid}:{$name}:{$parentId}";
+
+    if (isset($this->parentCache[$cacheKey])) {
+      return $this->parentCache[$cacheKey];
+    }
+
+    $terms = $this->entityTypeManager->getStorage('taxonomy_term')->loadByProperties([
+      'vid' => $vid,
+      'name' => $name,
+    ]);
+
+    if (empty($terms)) {
+      $this->parentCache[$cacheKey] = NULL;
+      return NULL;
+    }
+
+    // If only one term, check if it has the right parent
+    if (count($terms) === 1) {
+      $term = reset($terms);
+      $termParentIds = $this->getTermParentIds($term);
+
+      // Check if this term has the correct parent context
+      if ($parentId === 0 && empty($termParentIds)) {
+        // Root-level term matches
+        $this->parentCache[$cacheKey] = $term;
+        return $term;
+      }
+      elseif (in_array($parentId, $termParentIds)) {
+        // Parent matches
+        $this->parentCache[$cacheKey] = $term;
+        return $term;
+      }
+      else {
+        // Term exists but has different parent - treat as not found
+        $this->parentCache[$cacheKey] = NULL;
+        return NULL;
+      }
+    }
+
+    // Multiple terms with same name - filter by parent
+    foreach ($terms as $term) {
+      $termParentIds = $this->getTermParentIds($term);
+
+      // Check if this term has the correct parent
+      if ($parentId === 0 && empty($termParentIds)) {
+        // Looking for root-level term
+        $this->parentCache[$cacheKey] = $term;
+        return $term;
+      }
+      elseif (in_array($parentId, $termParentIds)) {
+        // Found term with matching parent
+        $this->parentCache[$cacheKey] = $term;
+        return $term;
+      }
+    }
+
+    // No term found with correct parent context
+    $this->parentCache[$cacheKey] = NULL;
+    return NULL;
+  }
+
+  /**
    * {@inheritdoc}
    */
   public function updateTerm($vid, $term, $parentId, $description, $rowData, $termCustomFields) {
     $needsSave = FALSE;
 
-    if ($parentId) {
-      $parentIds = $this->getTermParentIds($term);
-      if (!in_array($parentId, $parentIds)) {
-        $parentIds[] = $parentId;
-        $term->set('parent', $parentIds);
-        $needsSave = TRUE;
-      }
+    // CRITICAL FIX: Replace parent entirely, don't append
+    $currentParentIds = $this->getTermParentIds($term);
+    $newParentIds = $parentId ? [$parentId] : [0];
+
+    // Check if parent needs updating
+    if ($currentParentIds !== $newParentIds) {
+      $term->set('parent', $newParentIds);
+      $needsSave = TRUE;
+      \Drupal::logger('taxonomy_import')->debug('Updating parent for term @name from @old to @new', [
+        '@name' => $term->getName(),
+        '@old' => implode(',', $currentParentIds),
+        '@new' => implode(',', $newParentIds),
+      ]);
     }
 
     if ($term->getDescription() != $description) {
@@ -102,7 +191,27 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
       }
     }
 
-    return $needsSave ? $term->save() : TRUE;
+    if ($needsSave) {
+      try {
+        return $term->save();
+      }
+      catch (\Exception $e) {
+        \Drupal::logger('taxonomy_import')->error('Error saving term @name: @message', [
+          '@name' => $term->getName(),
+          '@message' => $e->getMessage(),
+        ]);
+        // Wait briefly and retry once
+        usleep(100000); // 100ms
+        try {
+          return $term->save();
+        }
+        catch (\Exception $e2) {
+          throw $e2;
+        }
+      }
+    }
+
+    return TRUE;
   }
 
   /**
@@ -150,7 +259,29 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
       }
     }
 
-    return $term->save();
+    try {
+      $result = $term->save();
+      \Drupal::logger('taxonomy_import')->debug('Created term @name (tid: @tid) with parent @parent', [
+        '@name' => $name,
+        '@tid' => $term->id(),
+        '@parent' => $parentId,
+      ]);
+      return $result;
+    }
+    catch (\Exception $e) {
+      \Drupal::logger('taxonomy_import')->error('Error creating term @name: @message', [
+        '@name' => $name,
+        '@message' => $e->getMessage(),
+      ]);
+      // Wait briefly and retry once
+      usleep(100000); // 100ms
+      try {
+        return $term->save();
+      }
+      catch (\Exception $e2) {
+        throw $e2;
+      }
+    }
   }
 
   /**
@@ -184,7 +315,10 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
    * {@inheritdoc}
    */
   public function saveTerms($vid, $rows, $forceNewTerms = TRUE) {
-    // First pass: identify parent terms
+    // Clear the parent cache for this import
+    $this->parentCache = [];
+
+    // First pass: identify and create parent terms
     $parentTerms = [];
     foreach ($rows as $row) {
       if (!empty($row['parent'])) {
@@ -192,34 +326,63 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
       }
     }
 
-    // Create parent terms first
+    // Create parent terms first (these should be root-level terms)
+    \Drupal::logger('taxonomy_import')->info('Creating @count parent terms', ['@count' => count($parentTerms)]);
+
     foreach ($parentTerms as $parentName) {
-      $existingParent = $this->loadTerm($vid, $parentName);
+      $existingParent = $this->loadTermByNameAndParent($vid, $parentName, 0);
       if (!$existingParent) {
         \Drupal::logger('taxonomy_import')->info('Creating parent term: @name', ['@name' => $parentName]);
         $this->createTerm($vid, $parentName, 0, '', [], []);
+        // Small delay to prevent deadlocks
+        usleep(10000); // 10ms
+      }
+      else {
+        \Drupal::logger('taxonomy_import')->debug('Parent term already exists: @name (tid: @tid)', [
+          '@name' => $parentName,
+          '@tid' => $existingParent->id(),
+        ]);
       }
     }
 
-    // Second pass: create/update all terms
-    foreach ($rows as $row) {
-      $term = $this->loadTerm($vid, $row['name']);
+    // Reload parent cache after creating parents
+    $this->parentCache = [];
 
-      // Find parent ID
+    // Second pass: process child terms
+    $processed = 0;
+    $created = 0;
+    $updated = 0;
+    $total = count($rows);
+
+    \Drupal::logger('taxonomy_import')->info('Processing @total child terms', ['@total' => $total]);
+
+    foreach ($rows as $row) {
+      $processed++;
+
+      // Find parent ID if parent is specified
       $parentId = 0;
       if (!empty($row['parent'])) {
-        $parents = $this->entityTypeManager->getStorage('taxonomy_term')->loadByProperties([
-          'name' => $row['parent'],
-          'vid' => $vid,
-        ]);
+        // Load the parent term (should be root-level for provinces)
+        $parentTerm = $this->loadTermByNameAndParent($vid, $row['parent'], 0);
 
-        if (count($parents) > 0) {
-          $parentId = key($parents);
-          \Drupal::logger('taxonomy_import')->debug('Parent term found: %name (tid: %tid)', [
-            '%name' => $row['parent'],
-            '%tid' => $parentId,
-          ]);
+        if ($parentTerm) {
+          $parentId = $parentTerm->id();
         }
+        else {
+          \Drupal::logger('taxonomy_import')->warning('Parent term not found for child @name: @parent', [
+            '@name' => $row['name'],
+            '@parent' => $row['parent'],
+          ]);
+          continue; // Skip this term if parent not found
+        }
+      }
+
+      // CRITICAL: Look for term with EXACT parent context
+      // If forceNewTerms is TRUE, always create new
+      // If forceNewTerms is FALSE, only update if term exists with this exact parent
+      $term = NULL;
+      if (!$forceNewTerms) {
+        $term = $this->loadTermByNameAndParent($vid, $row['name'], $parentId);
       }
 
       // Identify custom fields (exclude system fields)
@@ -255,13 +418,52 @@ class TaxonomyUtils implements TaxonomyUtilsInterface {
       }
 
       // Create or update term
-      if ($term && !$forceNewTerms) {
-        $this->updateTerm($vid, $term, $parentId, $row['description'] ?? '', $row, $validCustomFields);
+      try {
+        if ($term) {
+          // Term exists with this exact parent - update it
+          $this->updateTerm($vid, $term, $parentId, $row['description'] ?? '', $row, $validCustomFields);
+          $updated++;
+          \Drupal::logger('taxonomy_import')->debug('Updated existing term: @name under parent @parent_id', [
+            '@name' => $row['name'],
+            '@parent_id' => $parentId,
+          ]);
+        }
+        else {
+          // Create new term with specific parent
+          $this->createTerm($vid, $row['name'], $parentId, $row['description'] ?? '', $row, $validCustomFields);
+          $created++;
+          \Drupal::logger('taxonomy_import')->debug('Created new term: @name under parent @parent_id', [
+            '@name' => $row['name'],
+            '@parent_id' => $parentId,
+          ]);
+        }
+
+        // Add small delay every 50 terms to prevent deadlocks
+        if ($processed % 50 === 0) {
+          usleep(50000); // 50ms
+          \Drupal::logger('taxonomy_import')->info('Progress: @processed of @total terms (@created created, @updated updated)', [
+            '@processed' => $processed,
+            '@total' => $total,
+            '@created' => $created,
+            '@updated' => $updated,
+          ]);
+        }
       }
-      else {
-        $this->createTerm($vid, $row['name'], $parentId, $row['description'] ?? '', $row, $validCustomFields);
+      catch (\Exception $e) {
+        \Drupal::logger('taxonomy_import')->error('Failed to process term @name with parent @parent: @message', [
+          '@name' => $row['name'],
+          '@parent' => $row['parent'] ?? 'none',
+          '@message' => $e->getMessage(),
+        ]);
+        // Continue with next term instead of failing entire import
       }
     }
+
+    \Drupal::logger('taxonomy_import')->info('Import complete: @created created, @updated updated out of @total total', [
+      '@created' => $created,
+      '@updated' => $updated,
+      '@total' => $total,
+    ]);
   }
 
 }

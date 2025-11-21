@@ -21,6 +21,21 @@ interface TaxonomyUtilsInterface {
   public function loadTerm($vid, $name);
 
   /**
+   * Load a term by name and parent context.
+   *
+   * @param string $vid
+   *   The vocabulary ID.
+   * @param string $name
+   *   The term name.
+   * @param int $parentId
+   *   The parent term ID (0 for root-level terms).
+   *
+   * @return \Drupal\taxonomy\Entity\Term|null
+   *   The term object or NULL if not found.
+   */
+  public function loadTermByNameAndParent($vid, $name, $parentId = 0);
+
+  /**
    * Updates the parent and description of a term.
    *
    * The term will only be updated if something has changed.
